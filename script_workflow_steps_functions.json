@@ -1,0 +1,99 @@
+{
+  "Comment": "Workflow de automatización de EMR que crea, ejecuta Steps y termina el clúster. (Fix para JSONPath: ResultPath: null añadido a los AddStep para preservar ClusterId)",
+  "StartAt": "Create EMR Cluster",
+  "States": {
+    "Create EMR Cluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:createCluster",
+      "Parameters": {
+        "Name": "Covid-Processing-Cluster-SFN",
+        "ReleaseLabel": "emr-7.12.0",
+        "Instances": {
+          "InstanceFleets": [
+            {
+              "InstanceFleetType": "MASTER",
+              "TargetOnDemandCapacity": 1,
+              "InstanceTypeConfigs": [
+                {
+                  "InstanceType": "m4.xlarge"
+                }
+              ]
+            },
+            {
+              "InstanceFleetType": "CORE",
+              "TargetOnDemandCapacity": 2,
+              "InstanceTypeConfigs": [
+                {
+                  "InstanceType": "m4.xlarge"
+                }
+              ]
+            }
+          ],
+          "KeepJobFlowAliveWhenNoSteps": true,
+          "TerminationProtected": false
+        },
+        "JobFlowRole": "arn:aws:iam::954976319834:instance-profile/EMR_EC2_DefaultRole",
+        "ServiceRole": "arn:aws:iam::954976319834:role/EMR_DefaultRole"
+      },
+      "ResultPath": "$.ClusterIdResult",
+      "Next": "Wait for Cluster Ready"
+    },
+    "Wait for Cluster Ready": {
+      "Type": "Wait",
+      "Seconds": 1000,
+      "Next": "Add ETL Trusted Step"
+    },
+    "Add ETL Trusted Step": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:addStep",
+      "Parameters": {
+        "ClusterId.$": "$.ClusterIdResult.ClusterId",
+        "Step": {
+          "Name": "ETL_Trusted_Step",
+          "ActionOnFailure": "CONTINUE",
+          "HadoopJarStep": {
+            "Jar": "command-runner.jar",
+            "Args": [
+              "spark-submit",
+              "--deploy-mode",
+              "cluster",
+              "s3://buket-covid-colombia-proyecto3/scripts/emr_etl_staging.py"
+            ]
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Add Analisis Refined Step"
+    },
+    "Add Analisis Refined Step": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:addStep",
+      "Parameters": {
+        "ClusterId.$": "$.ClusterIdResult.ClusterId",
+        "Step": {
+          "Name": "Analisis_Refined_Step",
+          "ActionOnFailure": "CONTINUE",
+          "HadoopJarStep": {
+            "Jar": "command-runner.jar",
+            "Args": [
+              "spark-submit",
+              "--deploy-mode",
+              "cluster",
+              "s3://buket-covid-colombia-proyecto3/scripts/emr_analisis_final.py"
+            ]
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Terminate EMR Cluster"
+    },
+    "Terminate EMR Cluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:emr:terminateJobFlows",
+      "Parameters": {
+        "JobFlowIds.$": "$.ClusterIdResult.ClusterId"
+      },
+      "End": true
+    }
+  }
+}
